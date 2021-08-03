@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title> FFMPEG 视频水印定位工具 | FFMPEG Watermark Position Extraction</title>
+    <meta name="keywords" content="FFMPEG,watermark position extraction tools">
+    <meta name="description" content="FFMPEG Video Watermark Position Extraction Tools">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5/dist/css/bootstrap.min.css"crossorigin="anonymous">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-table@1.18.3/dist/bootstrap-table.min.css">
+    <!--    <link rel="stylesheet" href="https://code.jquery.com/ui/1.12.1/themes/base/jquery-ui.css">-->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/jqueryui/1.12.1/jquery-ui.min.css">
+    <style type="text/css">
+        img.watermark
+        {
+            min-width: 120px;
+            min-height: 60px;
+            border:1px dashed #000;
+        }
+        img.watermark:hover{
+            cursor:move;
+        }
+    </style>
+
+    <script src="https://cdn.jsdelivr.net/npm/jquery/dist/jquery.min.js"></script>
+    <!--    <script src="https://code.jquery.com/ui/1.12.1/jquery-ui.js"></script>-->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jqueryui/1.12.1/jquery-ui.min.js"></script>
+    <script>
+        (function($) {
+            $.Watermarker = function(obj,opt)
+            {
+                var obj = obj, opt = opt;
+                if (typeof(obj) !== 'object') obj = $(obj)[0];
+                if (typeof(opt) !== 'object') opt = { };
+                var defaults = {
+                    watermark_img:      'watermark.png',
+                    opacity:            1.0,
+                    opacitySlider:      null,
+                    x:                  null, //Centré par défaut
+                    y:                  null, //Centré par défaut
+                    w:                  null, //100% par défaut
+                    h:                  null, //100% par défaut
+                    position:           null, //Centré par défaut
+                    // Callbacks / Event Handlers
+                    onChange: function() { },
+                    onSelect: function() { }
+
+                };
+                var options = defaults;
+                setOptions(opt);
+                var $origimg = $(obj);
+                var $container = $('<div />')
+                    .width($origimg.width())
+                    .height($origimg.height())
+                    .css({
+                        position: 'relative'
+                    })
+                    .insertAfter($origimg);
+                $container.append($origimg);
+
+                var $wcontainer = $('<div />')
+                    .resizable({
+                        resize: function(event, ui) {
+                            setSubElemSameSizeAsContainer();
+                            updateData();
+                        },
+                        containment: 'parent'
+                    })
+                    .draggable({
+                        drag: function(event, ui) {
+                            updateData();
+                        },
+                        containment: 'parent'
+                    })
+                    .css({
+                        position:   'absolute'
+                    })
+                    .insertAfter($origimg);
+
+                //Créer une zone div sous l'image pour le style (contour, etc.)
+                var $styleContainer = $('<div />')
+                    .addClass('watermark')
+                    .css({
+                        position: 'absolute',
+                        'z-index':     1
+                    })
+                $wcontainer.append($styleContainer);
+
+
+                //Créer l'image watermark
+                var $waterimg = $('<img />')
+                    .attr('src', options.watermark_img)
+                    .addClass('watermark')
+                    .css({
+                        position: 'absolute',
+                        'z-index':     2
+                    })
+                $wcontainer.append($waterimg);
+
+
+                //Créer le slider d'opacité
+                if(options.opacitySlider !== null)
+                {
+                    options.opacitySlider.slider({
+                        min:    0,
+                        max:    100,
+                        value:  options.opacity*100,
+                        slide: function(event, ui) {
+                            options.opacity = ui.value/100;
+                            $wcontainer.css({
+                                opacity:    options.opacity,
+                                filter:     'alpha(opacity=' + (options.opacity*100) + ')'
+                            });
+                            updateData();
+                        }
+                    });
+                }
+                //Trouver les coordonnées afin de center le watermark
+                var middleX = Math.round($origimg.width()/2 - $waterimg.width()/2);
+                var middleY = Math.round($origimg.height()/2 - $waterimg.height()/2);
+                var bottomY = $origimg.height() - $waterimg.height();
+                var rightX  = $origimg.width() - $waterimg.width();
+
+                //Déterminer quelle position par défaut utiliser pour le watermark.
+                var posX, posY;
+
+                if(options.x != null && options.y !=null)
+                {
+                    //La position précise est déterminée
+                    posX = options.x;
+                    posY = options.y;
+                }
+                else if(options.position != null)
+                {
+                    //Une position spécifique est demandé
+                    switch(options.position)
+                    {
+                        case 'topleft':
+                            posX = 0;
+                            posY = 0;
+                            break;
+                        case 'topcenter':
+                            posX = middleX;
+                            posY = 0;
+                            break;
+                        case 'topright':
+                            posX = rightX;
+                            posY = 0;
+                            break;
+                        case 'centerleft':
+                            posX = 0;
+                            posY = middleY;
+                            break;
+                        case 'centercenter':
+                        case 'center':
+                        default:
+                            posX = middleX;
+                            posY = middleY;
+                            break;
+                        case 'centerright':
+                            posX = rightX;
+                            posY = middleY;
+                            break;
+                        case 'bottomleft':
+                            posX = 0;
+                            posY = bottomY;
+                            break;
+                        case 'bottomcenter':
+                            posX = middleX;
+                            posY = bottomY;
+                            break;
+                        case 'bottomright':
+                            posX = rightX;
+                            posY = bottomY;
+                            break;
+                    }
+                }
+                else
+                {
+                    //Rien est demandé: center.
+                    posX = middleX;
+                    posY = middleY;
+                }
+
+                //Positionner le watermark
+                $wcontainer.css({
+                    top: posY +'px',
+                    left: posX +'px'
+                });
+
+                //Dimentionner le watermark
+                //                  Si non-défini      taille de l'img     taille défini
+                $wcontainer.width(options.w == null ? $waterimg.width() : options.w);
+                $wcontainer.height(options.h == null ? $waterimg.height() : options.h);
+
+
+                setSubElemSameSizeAsContainer();
+
+                //Définir la transparence
+                $wcontainer.css({
+                    opacity:    options.opacity,
+                    filter:     'alpha(opacity=' + (options.opacity*100) + ')'
+                });
+                updateData();
+                function setOptions(opt)
+                {
+                    if (typeof(opt) != 'object') opt = { };
+                    options = $.extend(options,opt);
+
+                    if (typeof(options.onChange)!=='function')
+                        options.onChange = function() { };
+
+                    if (typeof(options.onSelect)!=='function')
+                        options.onSelect = function() { };
+
+                };
+
+                function setSubElemSameSizeAsContainer()
+                {
+                    $waterimg.width($wcontainer.width());
+                    $waterimg.height($wcontainer.height());
+
+                    //Trouver la taille des bordures de div.watermark
+                    var bL = removePx($styleContainer.css('borderLeftWidth'));
+                    var bR = removePx($styleContainer.css('borderRightWidth'));
+                    var bT = removePx($styleContainer.css('borderTopWidth'));
+                    var bB = removePx($styleContainer.css('borderBottomWidth'));
+
+                    $styleContainer.width($wcontainer.width() - bL - bR);
+                    $styleContainer.height($wcontainer.height() - bT - bB);
+                }
+
+                function removePx(str)
+                {
+                    return parseInt(str.replace('px',''));
+                }
+                function updateData()
+                {
+                    var WatermarkPos = getPos($waterimg);
+                    var ContainerPos = getPos($container);
+                    options.onChange({
+                        x:      WatermarkPos[0]-ContainerPos[0],
+                        y:      WatermarkPos[1]-ContainerPos[1],
+                        w:      $waterimg.width(),
+                        h:      $waterimg.height(),
+                        opacity:    options.opacity
+                    });
+                }
+
+                function getPos(obj)
+                {
+                    // Updated in v0.9.4 to use built-in dimensions plugin
+                    var pos = $(obj).offset();
+                    return [ pos.left, pos.top ];
+                };
+            };
+
+            $.fn.Watermarker = function(options)/*{{{*/
+            {
+                function attachWhenDone(from)/*{{{*/
+                {
+                    var loadsrc = options.useImg || from.src;
+                    var img = new Image();
+                    img.onload = function() { $.Watermarker(from,options); };
+                    img.src = loadsrc;
+                };
+                /*}}}*/
+                if (typeof(options) !== 'object') options = { };
+
+                // Iterate over each object, attach Jcrop
+                this.each(function()
+                {
+                    // If we've already attached to this object
+                    if ($(this).data('Watermarker'))
+                    {
+                        // The API can be requested this way (undocumented)
+                        if (options == 'api') return $(this).data('Watermarker');
+                        // Otherwise, we just reset the options...
+                        else $(this).data('Watermarker').setOptions(options);
+                    }
+                    // If we haven't been attached, preload and attach
+                    else attachWhenDone(this);
+                });
+
+                return this;
+            };
+        })(jQuery);
+    </script>
+    <script src="https://unpkg.com/bootstrap-table@1.18.3/dist/bootstrap-table.min.js"></script>
+    <script src="https://unpkg.com/bootstrap-table@1.18.3/dist/extensions/toolbar/bootstrap-table-toolbar.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5/dist/js/bootstrap.bundle.min.js" crossorigin="anonymous"></script>
+</head>
+<body>
+
+<div class="fluid-container">
+    <div class="h6 p-2">
+        <h3 class="border-bottom">视频水印定位</h3>
+    </div>
+    <div class="row">
+        <div class="col">
+            <div class="shadow-sm p-2 bg-body rounded g-1">
+                <form>
+                    <div class="row g-1">
+                        <div class="col-6">
+                            <div class="">
+                                <label class="form-label">上传预览 (拖拽或选择本机)</label>
+                                <input id="ImageMedias" multiple="multiple" name="ImageMedias" type="file" accept=".jfif,.jpg,.jpeg,.png,.gif" class="form-control custom-file-input"  value="">
+                            </div>
+                        </div>
+                    </div>
+
+                    <br>
+
+                    <div class="row g-1">
+                        <div class="col-auto">
+                            <label for="formFile1" class="form-label">背景大小 (px)</label>
+                            <div class="input-group">
+                                <span class="input-group-text">W</span>
+                                <input type="text" class="form-control" id="bgw">
+                                <span class="input-group-text">H</span>
+                                <input type="text" class="form-control" id="bgh">
+                            </div>
+                        </div>
+
+                        <div class="col-auto">
+                            <label for="formFile2" class="form-label">水印坐标 (px)</label>
+                            <div class="input-group">
+                                <span class="input-group-text">W</span>
+                                <input type="text" class="form-control" id="w">
+                                <span class="input-group-text">H</span>
+                                <input type="text" class="form-control" id="h">
+                                <span class="input-group-text">X</span>
+                                <input type="text" class="form-control" id="x">
+                                <span class="input-group-text">Y</span>
+                                <input type="text" class="form-control" id="y">
+                            </div>
+                        </div>
+
+                        <div class="col-auto">
+                            <label for="formFile3" class="form-label">透明度 (px)</label>
+                            <div class="input-group">
+                                <div id="sliderdiv" style="width:200px;"></div>
+                            </div>
+                        </div>
+
+                    </div>
+                </form>
+
+            </div>
+            <hr>
+
+            <div>
+                <div id="divImageMediaPreview"></div>
+            </div>
+
+            <br />
+
+            <div class="mb-3">
+                <label for="command" class="form-label">Command:</label>
+                <textarea class="form-control" id="command" rows="5"></textarea>
+            </div>
+
+        </div>
+    </div>
+
+</div>
+
+<script>
+
+    function showCoords(c)
+    {
+        $('#x').val(c.x);
+        $('#y').val(c.y);
+        $('#w').val(c.w);
+        $('#h').val(c.h);
+        $('#a').val(c.opacity);
+        var str = 'ffmpeg -hide_banner -loglevel error -y -i ${INPUT}.mp4 -vf delogo=x='+c.x+':y='+c.y+':w='+c.w+':h='+c.h+':show=0 -t 15 '+Date.now()+".mp4";
+        $("#command").val(str);
+    };
+
+    $(function() {
+
+        $("#ImageMedias").change(function () {
+            if (typeof (FileReader) != "undefined") {
+                var dvPreview = $("#divImageMediaPreview");
+                dvPreview.html("");
+                $($(this)[0].files).each(function () {
+                    var file = $(this);
+                    var reader = new FileReader();
+                    reader.onload = function (e) {
+                        var img = $("<img />");
+                        // img.attr("style", "width: 150px; height:100px; padding: 10px");
+                        img.attr("src", e.target.result);
+                        //img.attr("class","watermark");
+                        img.attr("id","watermarked");
+                        dvPreview.append(img);
+
+                        var imageURL = reader.result;
+                        // Get image size for image.
+                        getImageSize(imageURL, function(imageWidth, imageHeight) {
+                            // Do stuff here.
+                            console.log(imageWidth,imageHeight);
+                            //console.log(`width : ${image.width} px`, `height: ${image.height} px`);
+                            $("#bgw").val(imageWidth);
+                            $("#bgh").val(imageHeight);
+                        });
+
+                        //apply watermark
+                        $('#watermarked').Watermarker({
+                            // topleft
+                            // topcenter
+                            // topright
+                            // centerleft
+                            // centercenter
+                            // center (raccourci pour centercenter)
+                            // centerright
+                            // bottomleft
+                            // bottomcenter
+                            // bottomright
+                            watermark_img:      'data:image/jpeg;base64,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',
+                            opacity:            1,
+                            opacitySlider:      $('#sliderdiv'),
+                            position:           'center',
+                            onChange:           showCoords
+                        });
+                        //$(".watermark").css({"width":"240px","height":"120px"});
+                    }
+                    reader.readAsDataURL(file[0]);
+                });
+            } else {
+                alert("This browser does not support HTML5 FileReader.");
+            }
+        });
+
+
+    })
+
+
+    function getImageSize(imageURL, callback) {
+        // Create image object to ascertain dimensions.
+        var image = new Image();
+        // Get image data when loaded.
+        image.onload = function() {
+            // No callback? Show error.
+            if (!callback) {
+                console.log("Error getting image size: no callback. Image URL: " + imageURL);
+                // Yes, invoke callback with image size.
+            } else {
+                callback(this.naturalWidth, this.naturalHeight);
+            }
+        }
+        // Load image.
+        image.src = imageURL;
+    }
+</script>
+</body>
+</html>
